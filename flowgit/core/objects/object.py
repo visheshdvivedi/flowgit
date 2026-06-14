@@ -1,6 +1,7 @@
 import zlib
 import hashlib
 from enum import Enum
+from dataclasses import dataclass
 from abc import ABC, abstractmethod
 
 class ObjectType(Enum):
@@ -8,6 +9,14 @@ class ObjectType(Enum):
     tree = "tree"
     blob = "blob"
     tag = "tag"
+
+
+@dataclass
+class Tagger:
+    name: str
+    email: str
+    timestamp: str
+    timezone: str
 
 
 class FlowGitObject(ABC):

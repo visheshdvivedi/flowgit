@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 from typer import Typer, Argument, Option
-from typing import Optional, Annotated
+from typing import Annotated, List
 
 from flowgit.core.objects.object import ObjectType
 from flowgit.core.repository import Repository
@@ -79,14 +79,16 @@ def cat_file(
 
 @app.command()
 def maketree(
-    content: str = Argument(
-        help = "The ls-tree formatted content."
-    )
+    entries: Annotated[List[str], Option(
+        "-e", "--entry",
+        help="A tree entry in format '<mode> <type> <name> <hash>'"
+    )]
 ):
     """
     Build a tree object from a ls-tree-format input
     """
     display_command_header()
+    content = "\n".join(entries)
     repository.make_tree(content)
 
 @app.command()
@@ -110,8 +112,23 @@ def commit_tree(
     repository.commit_tree(tree, parent, message)
 
 @app.command()
-def make_tag():
+def maketag(
+    object: str = Argument(
+        help = "The object to be tagged"
+    ),
+    type: str = Argument(
+        help = "The type of the object being tagged"
+    ),
+    name: str = Argument(
+        help = "The name of the tag"
+    ),
+    message: Annotated[str, Option(
+        "-m", "--message",
+        help = "Pass on a human readable message. (default: "")"
+    )] = "",
+):
     """
     Create a new tag object from stdin (validated format)
     """
-    pass
+    display_command_header()
+    repository.make_tag(object, type, name, message)

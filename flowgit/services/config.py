@@ -30,4 +30,4 @@ class FlowGitConfigManager:
         display_creation_message(f".flowgit/config")
 
     def get_config(self):
-        return self.config.items()
+        return self.config.__dict__['_sections']

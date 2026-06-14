@@ -118,7 +118,7 @@ class Repository:
         if write:
             self._write_object(object)
         else:
-            display_creation_message(f"{hash}")
+            display_creation_message(f"{object.oid()}")
 
     def read_object(self, object: str):
     
@@ -176,7 +176,7 @@ class Repository:
         compressed = tree.compress()
         self._write_object(tree)
 
-    def commit_message(self, tree: str, parent: str, message: str):
+    def commit_tree(self, tree: str, parent: str, message: str):
 
         # check if tree and parent exist or not
         tree_path = self._get_hash_full_folder_path(tree)
@@ -189,16 +189,43 @@ class Repository:
                 display_error_message(f"Object with hash {parent} not found")
                 return
             
+        config = self.config.get_config()
+        author_tagger = Tagger(
+            name = config['user']['name'],
+            email = config['user']['email'],
+            timestamp="",
+            timezone=""
+        )
+        committer_tagger = Tagger(
+            name = config['user']['name'],
+            email = config['user']['email'],
+            timestamp="",
+            timezone=""
+        )
+            
         # create commit object
         commit = FlowGitCommitObject(
             tree=tree,
             parent=parent,
             message=message,
-            author=self.config['user']['name'],
-            author_email=self.config['user']['email'],
-            committer=self.config['user']['name'],
-            committer_email=self.config['user']['email']
+            author_tagger=author_tagger,
+            committer_tagger=committer_tagger
         )
 
         # write commit object
         self._write_object(commit)
+
+
+    def make_tag(self, object: str, type: str, name: str, message: Optional[str]):
+        config = self.config.get_config()
+        tagger = Tagger(
+            name = config['user']['name'],
+            email = config['user']['email'],
+            timestamp="",
+            timezone=""
+        )
+        tag_object = TagObject(
+            object, type, name, tagger, message
+        )
+        self._write_object(tag_object)
+

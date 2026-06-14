@@ -1,7 +1,7 @@
 import tzlocal
+from typing import Optional
 from datetime import datetime, timezone
-from flowgit.core.objects.object import FlowGitObject, ObjectType
-
+from flowgit.core.objects.object import FlowGitObject, ObjectType, Tagger
 
 def _get_current_timestamp():
     return datetime.now(timezone.utc).timestamp()
@@ -17,17 +17,33 @@ def _get_timezone_difference():
 class FlowGitCommitObject(FlowGitObject):
     type = ObjectType.commit
 
-    def __init__(self, tree, parent=None, author="Unknown", author_email="unknown@unknown.com", author_timestamp=_get_current_timestamp(), committer="Unknown", committer_email="unknown@unknown.com", commiter_timestamp=_get_current_timestamp(), message=""):
+    def __init__(self, 
+        tree, 
+        parent=None, 
+        author_tagger=Optional[Tagger],
+        committer_tagger=Optional[Tagger],
+        message=""
+    ):
         self.tree = tree
         self.parent = parent
         
-        self.author = author
-        self.author_email = author_email
-        self.author_timestamp = author_timestamp
+        if author_tagger:
+            self.author = author_tagger.name
+            self.author_email = author_tagger.email
+        else:
+            self.author = "Unknown"
+            self.author_email = "unknown@unknown.com"
 
-        self.committer = committer
-        self.committer_email = committer_email
-        self.commiter_timestamp = commiter_timestamp
+        if committer_tagger:
+            self.committer = committer_tagger.name
+            self.committer_email = committer_tagger.email
+        else:
+            self.committer = "Unknown"
+            self.committer_email = "unknown@unknown.com"
+        
+
+        self.author_timestamp = _get_current_timestamp()
+        self.commiter_timestamp = _get_current_timestamp()
 
         self.message = message
 
@@ -64,4 +80,25 @@ class FlowGitCommitObject(FlowGitObject):
         line = lines[0]
         is_message = False
         while len(line.strip()) > 0:
-            
+            if is_message:
+                output["message"] += line + "\n"
+                continue
+
+            for keyword in ['tree', 'parent']:
+                if line.startswith(keyword):
+                    content = line.split(" ", 2)[1]
+                    output[keyword] = content
+                    continue
+
+            if line.startswith("author"):
+                words = line.split(" ")
+                output['author'] = words[1]
+                output['author_email'] = words[2]
+                output['author_timestamp'] = words[3]
+            if line.startswith("committer"):
+                words = line.split(" ")
+                output['committer'] = words[1]
+                output['author_email'] = words[2]
+                output['author_timestamp'] = words[3]
+
+        return output
