@@ -132,3 +132,67 @@ def maketag(
     """
     display_command_header()
     repository.make_tag(object, type, name, message)
+
+
+@app.command()
+def update_index(
+    add: Annotated[List[str], Option(
+        "-a", "--add",
+        help="Add new files to the index"
+    )] = [],
+    remove: Annotated[List[str], Option(
+        "-r", "--remove",
+        help="Remove existing files from the index"
+    )] = [],
+    info: Annotated[bool, Option(
+        "--index-info",
+        help = "Read index information from stdin",
+    )] = False,
+    list_entries: Annotated[bool, Option(
+        "--list",
+        help = "List entries from the index file"
+    )] = False
+):
+    """
+    Modifies the index. Each file mentioned is updated into the index and any unmerged or needs updating state is cleared.
+    """
+    display_command_header()
+    repository.update_index(add, remove, info, list_entries)
+
+
+@app.command()
+def write_tree():
+    """
+    Creates a tree object using the current index. The name of the new tree object is printed to standard output.
+    """
+    display_command_header()
+    repository.write_tree()
+
+
+@app.command()
+def update_ref(
+    ref_path: str = Argument(
+        help = "Path to the reference where to write"
+    ),
+    sha: str = Argument(
+        help = "SHA of the commit object"
+    )
+):
+    """
+    Update reference to a specific branch
+    """
+    display_command_header()
+    repository.update_ref(ref_path, sha)
+
+
+@app.command()
+def read_tree(
+    sha: str = Argument(
+        help = "SHA of the tree object to populate the index from"
+    )
+):
+    """
+    Reads the files from the tree object and adds the files to the index
+    """
+    display_command_header()
+    repository.read_tree(sha)

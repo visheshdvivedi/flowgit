@@ -36,8 +36,10 @@ class FlowGitObject(ABC):
         header = f"{self.type.value} {len(content)}\0".encode()
         return header + content
     
-    def oid(self) -> str:
-        return hashlib.sha1(self.raw()).hexdigest()
+    def oid(self, hexdigest=True) -> str:
+        if hexdigest:
+            return hashlib.sha1(self.raw()).hexdigest()
+        return hashlib.sha1(self.raw())
     
     def compress(self) -> bytes:
         return zlib.compress(self.raw())

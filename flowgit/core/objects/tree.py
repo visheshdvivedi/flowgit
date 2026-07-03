@@ -6,6 +6,7 @@ from flowgit.core.objects.object import FlowGitObject, ObjectType
 @dataclass
 class TreeEntry:
     mode: str
+    type: str
     name: str
     oid: str
 
@@ -16,9 +17,9 @@ class FlowGitTreeObject(FlowGitObject):
     def __init__(self):
         self.entries: List[TreeEntry] = []
 
-    def add(self, mode, name, oid):
+    def add(self, mode, type, name, oid):
         self.entries.append(
-            TreeEntry(mode, name, oid)
+            TreeEntry(mode, type, name, oid)
         )
 
     def serialize(self) -> bytes:
@@ -26,7 +27,9 @@ class FlowGitTreeObject(FlowGitObject):
 
         for entry in self.entries:
             entry_bytes = bytes()
-            entry_bytes += entry.mode.encode("utf-8")
+            entry_bytes += str(entry.mode).encode("utf-8")
+            entry_bytes += b" "
+            entry_bytes += entry.type.encode("utf-8")
             entry_bytes += b" "
             entry_bytes += entry.name.encode("utf-8")
             entry_bytes += b"\x00"
@@ -34,6 +37,11 @@ class FlowGitTreeObject(FlowGitObject):
             result.append(entry_bytes)
 
         return b"\n".join(result)
+
+    def mode_to_type(self, mode: int) -> str:
+        if mode == 0o040000:
+            return "tree"
+        return "blob"
     
     @classmethod
     def deserialize(cls, data: bytes) -> List[TreeEntry]:
@@ -43,8 +51,8 @@ class FlowGitTreeObject(FlowGitObject):
             null_idx = line.index(b"\x00")
             header = line[:null_idx].decode()
             hash = line[null_idx+1:].hex()
-            mode, name = header.split(" ")
+            mode, type, name = header.split(" ")
             output.append(
-                TreeEntry(mode=mode, name=name, oid=hash)
+                TreeEntry(mode=mode, type=type, name=name, oid=hash)
             )
         return output
