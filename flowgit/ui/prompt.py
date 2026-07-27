@@ -2,7 +2,7 @@ from rich.prompt import Prompt
 
 def ask_username():
     username = Prompt.ask(
-        "Enter name"
+        "Enter username"
     )
     return username
 

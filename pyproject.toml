@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "flowgit"
 version = "1.0.0"
@@ -8,6 +12,7 @@ dependencies = [
     "argparse>=1.4.0",
     "configparser>=7.2.0",
     "datetime>=5.5",
+    "pathspec>=1.1.1",
     "rich>=15.0.0",
     "typer>=0.23.2",
     "tzlocal>=5.3.1",
@@ -15,3 +20,22 @@ dependencies = [
 
 [project.scripts]
 flowgit = "flowgit.main:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+    "pytest-cov>=7.1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["flowgit/tests"]
+pythonpath = ["."]
+addopts = "-ra --strict-markers"
+
+[tool.coverage.run]
+source = ["flowgit"]
+omit = ["flowgit/tests/*", "flowgit/main.py"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 70

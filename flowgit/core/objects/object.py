@@ -20,16 +20,16 @@ class Tagger:
 
 
 class FlowGitObject(ABC):
-    type: ObjectType
+    type: ObjectType = ObjectType.blob
 
     @abstractmethod
     def serialize(self) -> bytes:
-        pass
+        return b""
 
     @classmethod
     @abstractmethod
     def deserialize(cls, data: bytes):
-        pass
+        return bytes.decode()
 
     def raw(self) -> bytes:
         content = self.serialize()

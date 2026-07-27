@@ -19,9 +19,9 @@ class FlowGitCommitObject(FlowGitObject):
 
     def __init__(self, 
         tree, 
-        parent=None, 
-        author_tagger=Optional[Tagger],
-        committer_tagger=Optional[Tagger],
+        parent=[], 
+        author_tagger: Optional[Tagger] = None,
+        committer_tagger: Optional[Tagger] = None,
         message=""
     ):
         self.tree = tree
@@ -51,8 +51,9 @@ class FlowGitCommitObject(FlowGitObject):
         lines = []
         lines.append(f"tree {self.tree}")
 
-        if self.parent:
-            lines.append(f"parent {self.parent}")
+        if len(self.parent):
+            for parent in self.parent:
+                lines.append(f"parent {parent}")
 
         lines.extend([
             f"author {self.author} <{self.author_email}> {self.author_timestamp} {_get_timezone_difference()}",
@@ -65,40 +66,48 @@ class FlowGitCommitObject(FlowGitObject):
     
     @classmethod
     def deserialize(cls, data: bytes):
-        lines = data.split("\n")
+        lines = data.split(b"\n")
         output = {
             "tree": None,
-            "parent": None,
+            "parent": [],
             "author": None,
             "author_email": None,
             "author_timestamp": None,
+            "author_timezone": None,
             "committer": None,
             "committer_email": None,
             "committer_timestamp": None,
-            "message": None
+            "committer_timezone": None,
+            "message": ""
         }
-        line = lines[0]
         is_message = False
-        while len(line.strip()) > 0:
+        for line in lines:
             if is_message:
-                output["message"] += line + "\n"
+                output["message"] += line.decode() + "\n"
                 continue
-
-            for keyword in ['tree', 'parent']:
-                if line.startswith(keyword):
-                    content = line.split(" ", 2)[1]
-                    output[keyword] = content
-                    continue
-
-            if line.startswith("author"):
-                words = line.split(" ")
+            if line == b"":
+                is_message = True
+                continue
+            if line.startswith(b"tree"):
+                content = line.split(b" ", 2)[1]
+                output['tree'] = content
+            if line.startswith(b"parent"):
+                content = line.split(b" ", 2)[1]
+                output['parent'].append(content)
+            if line.startswith(b"commit"):
+                content = line.split(b" ", 2)[1]
+                output['commit'] = content
+            if line.startswith(b"author"):
+                words = line.split(b" ")
                 output['author'] = words[1]
                 output['author_email'] = words[2]
                 output['author_timestamp'] = words[3]
-            if line.startswith("committer"):
-                words = line.split(" ")
+                output['author_timezone'] = words[4]
+            if line.startswith(b"committer"):
+                words = line.split(b" ")
                 output['committer'] = words[1]
-                output['author_email'] = words[2]
-                output['author_timestamp'] = words[3]
+                output['committer_email'] = words[2]
+                output['committer_timestamp'] = words[3]
+                output['committer_timezone'] = words[4]
 
         return output

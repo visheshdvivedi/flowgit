@@ -17,7 +17,7 @@ def _clear_console():
 
 def display_warning_message(message: str):
     mark = "⚠️"
-    rprint(f"{mark} {message}")
+    rprint(f"{mark}  {message}")
 
 def display_creation_message(message: str):
     string = f"[bold][{Colors.GREEN.value}]:heavy_check_mark:[/{Colors.GREEN.value}] [white]Created[/white] [{Colors.DARK_BLUE.value}]{message}[/{Colors.DARK_BLUE.value}] [white][/white][/bold]"

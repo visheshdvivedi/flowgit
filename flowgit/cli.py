@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 from typer import Typer, Argument, Option
-from typing import Annotated, List
+from typing import Annotated, List, Optional
 
 from flowgit.core.objects.object import ObjectType
 from flowgit.core.repository import Repository
@@ -78,6 +78,14 @@ def cat_file(
     repository.read_object(object)
 
 @app.command()
+def ignored():
+    """
+    Return list of ignored files as per .flowgitignore
+    """
+    display_command_header()
+    repository.ignored()
+
+@app.command()
 def maketree(
     entries: Annotated[List[str], Option(
         "-e", "--entry",
@@ -96,20 +104,20 @@ def commit_tree(
     tree: str = Argument(
         help = "An existing tree object."
     ),
-    parent: Annotated[str, Option(
+    parents: Annotated[List[str], Option(
         "-p", "--parent",
-        help = "Specify the hash of the parent object. (default: "")"
-    )] = "",
+        help="Specify the parent(s) for the commit"
+    )] = [],
     message: Annotated[str, Option(
         "-m", "--message",
         help = "Pass on a human readable message. (default: "")"
     )] = "",
 ):
     """
-    Create a commit object from a tree SHA + parent + message
+    Create a commit object from a tree SHA + parent(s) + message
     """
     display_command_header()
-    repository.commit_tree(tree, parent, message)
+    repository.commit_tree(tree, parents, message)
 
 @app.command()
 def maketag(
@@ -196,3 +204,156 @@ def read_tree(
     """
     display_command_header()
     repository.read_tree(sha)
+
+
+@app.command()
+def checkout_index(
+    files: Annotated[Optional[List[str]], Argument(
+        help="Specific files to checkout from the index"
+    )] = None,
+    all: Annotated[bool, Option(
+        "-a", "--all",
+        help = "Write out all entries in the index file"
+    )] = False,
+    force: Annotated[bool, Option(
+        "-f", "--force",
+        is_flag=True,
+        help = "overwrite existing files, by default skips files that already exists"
+    )] = False
+):
+    """
+    Writes files from the index to the current directory
+    """
+    display_command_header()
+    repository.checkout_index(files or [], all, force)
+
+
+@app.command()
+def checkout(
+    hash: str = Argument(
+        help = "The hash of the commit to checkout back to"
+    )
+):
+    """
+    Return back to previous commit
+    """
+    display_command_header()
+    repository.checkout(hash)
+
+
+@app.command()
+def add(
+    files: list[str] = Argument(
+        help = "Files to the added to staging"
+    )
+):
+    """
+    Adds files to staging index file
+    """
+    display_command_header()
+    repository.add(files)
+
+
+@app.command()
+def commit(
+    message: Annotated[str, Option(
+        "-m", "--message",
+        help = "Message to specify in the commit"
+    )] = ""
+):
+    """
+    Creates a commit for all files in staging
+    """
+    display_command_header()
+    repository.commit(message)
+
+
+@app.command()
+def branch(
+    new_branch_name: Annotated[Optional[str], Argument(
+        help = "Name of the branch to create"
+    )] = "",
+    delete_branch_name: Annotated[str, Option(
+        "-d", "--delete",
+        help = "Specify the branch to delete"
+    )] = ""
+):
+    """
+    Allows to list, create or delete branches
+    """
+    display_command_header()
+    repository.branch(new_branch_name, delete_branch_name)
+
+
+@app.command()
+def switch(
+    branch_name: str = Argument(
+        help = "The name of the branch to switch to"
+    )
+):
+    """
+    Switch between different branches
+    """
+    display_command_header()
+    repository.switch(branch_name)
+
+
+@app.command()
+def log():
+    """
+    Display commit history for current branch
+    """
+    display_command_header()
+    repository.log()
+
+
+@app.command()
+def status():
+    """
+    Display current branch status
+    """
+    display_command_header()
+    repository.status()
+
+
+@app.command()
+def restore(
+    staged: Annotated[bool, Option(
+        "-s", "--staged",
+        is_flag=True,
+        help = "To restore working tree from last commit"
+    )] = False
+):
+    """
+    Restore working tree to either index or last commit
+    """
+    display_command_header()
+    repository.restore(staged)
+
+
+@app.command()
+def diff(
+    staged: Annotated[bool, Option(
+        "-s", "--staged",
+        is_flag=True,
+        help = "To restore working tree from last commit"
+    )] = False
+):
+    """
+    Compares file contents line by line to show changes
+    """
+    display_command_header()
+    repository.diff(staged)
+
+
+@app.command()
+def merge(
+    branch_name: str = Argument(
+        help = "The name of the branch to switch to"
+    )
+):
+    """
+    Merge changes from the provided branch to the current branch
+    """
+    display_command_header()
+    repository.merge(branch_name)

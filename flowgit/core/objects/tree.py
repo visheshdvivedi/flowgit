@@ -5,7 +5,7 @@ from flowgit.core.objects.object import FlowGitObject, ObjectType
 
 @dataclass
 class TreeEntry:
-    mode: str
+    mode: int
     type: str
     name: str
     oid: str
@@ -17,26 +17,24 @@ class FlowGitTreeObject(FlowGitObject):
     def __init__(self):
         self.entries: List[TreeEntry] = []
 
-    def add(self, mode, type, name, oid):
+    def add(self, mode: int, type: str, name: str, oid: str):
         self.entries.append(
             TreeEntry(mode, type, name, oid)
         )
 
     def serialize(self) -> bytes:
-        result = []
+        result = b""
 
         for entry in self.entries:
-            entry_bytes = bytes()
-            entry_bytes += str(entry.mode).encode("utf-8")
-            entry_bytes += b" "
-            entry_bytes += entry.type.encode("utf-8")
-            entry_bytes += b" "
-            entry_bytes += entry.name.encode("utf-8")
-            entry_bytes += b"\x00"
-            entry_bytes += bytes.fromhex(entry.oid)
-            result.append(entry_bytes)
+            result += str(oct(entry.mode)[2:]).encode()
+            result += b" "
+            result += entry.type.encode("utf-8")
+            result += b" "
+            result += entry.name.encode("utf-8")
+            result += b"\x00"
+            result += bytes.fromhex(entry.oid)
 
-        return b"\n".join(result)
+        return result
 
     def mode_to_type(self, mode: int) -> str:
         if mode == 0o040000:
@@ -45,14 +43,29 @@ class FlowGitTreeObject(FlowGitObject):
     
     @classmethod
     def deserialize(cls, data: bytes) -> List[TreeEntry]:
-        lines = data.split(b"\n")
-        output: List[TreeEntry] = []
-        for line in lines:
-            null_idx = line.index(b"\x00")
-            header = line[:null_idx].decode()
-            hash = line[null_idx+1:].hex()
-            mode, type, name = header.split(" ")
-            output.append(
-                TreeEntry(mode=mode, type=type, name=name, oid=hash)
-            )
-        return output
+        entries = []
+        offset = 0
+        while offset < len(data):
+            # read mode
+            space = data.index(b" ", offset)
+            mode = data[offset:space].decode()
+            offset = space + 1
+
+            # read type
+            space = data.index(b" ", offset)
+            type = data[offset:space].decode()
+            offset = space + 1
+
+            # read name
+            null = data.index(b"\x00", offset)
+            name = data[offset:null].decode()
+            offset = null + 1
+
+            # read 20 raw bytes sha1
+            oid = data[offset:offset+20].hex()
+            offset += 20
+
+            type = "tree" if mode == "40000" else "blob"
+            entries.append(TreeEntry(mode=mode, type=type, name=name, oid=oid))
+
+        return entries
