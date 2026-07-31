@@ -8,7 +8,7 @@ tree_entries = [
         mode=123, type="blob", name="test.txt", oid=test_sha
     )
 ]
-serialize_output = b'173 blob test.txt\x00\x04\x0f\x06\xfdw@\x92G\x8dE\x07t\xf5\xba0\xc5\xdax\xac\xc8'
+serialize_output = b'173 test.txt\x00\x04\x0f\x06\xfdw@\x92G\x8dE\x07t\xf5\xba0\xc5\xdax\xac\xc8'
 
 class TestTreeObject:
 

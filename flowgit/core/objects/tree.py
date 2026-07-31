@@ -10,6 +10,15 @@ class TreeEntry:
     name: str
     oid: str
 
+def mode_to_type(mode) -> str:
+    # mode arrives as a real int when built via write_tree_recursive, but as
+    # the raw octal-digit string parsed straight off the wire when called
+    # from deserialize() - normalize before comparing, or a str mode never
+    # equals the int literal below and everything misclassifies as "blob".
+    mode_int = int(mode, 8) if isinstance(mode, str) else mode
+    if mode_int == 0o040000:
+        return "tree"
+    return "blob"
 
 class FlowGitTreeObject(FlowGitObject):
     type = ObjectType.tree
@@ -27,8 +36,6 @@ class FlowGitTreeObject(FlowGitObject):
 
         for entry in self.entries:
             result += str(oct(entry.mode)[2:]).encode()
-            result += b" "
-            result += entry.type.encode("utf-8")
             result += b" "
             result += entry.name.encode("utf-8")
             result += b"\x00"
@@ -51,11 +58,6 @@ class FlowGitTreeObject(FlowGitObject):
             mode = data[offset:space].decode()
             offset = space + 1
 
-            # read type
-            space = data.index(b" ", offset)
-            type = data[offset:space].decode()
-            offset = space + 1
-
             # read name
             null = data.index(b"\x00", offset)
             name = data[offset:null].decode()
@@ -65,7 +67,7 @@ class FlowGitTreeObject(FlowGitObject):
             oid = data[offset:offset+20].hex()
             offset += 20
 
-            type = "tree" if mode == "40000" else "blob"
+            type = mode_to_type(mode)
             entries.append(TreeEntry(mode=mode, type=type, name=name, oid=oid))
 
         return entries
