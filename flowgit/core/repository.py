@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import os
 import zlib
+import shutil
 import difflib
 import pathspec
 from typing import List, Tuple, Dict, Union
@@ -115,7 +118,7 @@ class Repository:
             
         return ""
     
-    def _parse_tree_row(self, row: str) -> Tuple[str, str, str, str]:
+    def _parse_tree_row(self, row: str) -> Tuple[int, str, str, str]:
         """
         Parse a tree row string of format
         '<permission> <type> <hash> <name>'
@@ -125,14 +128,17 @@ class Repository:
         permission, type, hash, name = row.split(" ", maxsplit=4)
         if len(permission) != 6 or not permission.isdigit() or permission.isalpha():
             display_error_message(f"Invalid format for mode in tree object content.")
-            return 
+            return
         if len(hash) > 40:
             display_error_message(f"Invalid format for hash tree object content.")
             return
         if not self._is_valid_hash(hash):
             display_error_message(f"Object {hash} does not exist.")
             return
-        return permission, type, name, hash
+        # permission is parsed as octal digit text (e.g. "100644"); convert
+        # to a real int so it matches every other TreeEntry.mode construction
+        # path and FlowGitTreeObject.serialize()'s oct(entry.mode) call.
+        return int(permission, 8), type, name, hash
     
     def _write_object(self, object: FlowGitObject) -> None:
         """
@@ -169,7 +175,7 @@ class Repository:
                 display_warning_message("Skipping flowgit initialization as folder already exists")
                 return
             else:
-                os.remove(self.flowgit_directory)
+                shutil.rmtree(self.flowgit_directory)
         
         # create flowgit folder
         os.mkdir(self.flowgit_directory)
@@ -379,16 +385,27 @@ class Repository:
             timestamp="",
             timezone=""
         )
-        tag_object = TagObject(
-            object, type, name, tagger, message
+        tag_object = FlowGitTagObject(
+            sha=object, type=type, name=name, message=message, tagger=tagger
         )
         self._write_object(tag_object)
 
-    def create_index_entry_from_file(self, file_path: str, merge_stage: int = 0) -> IndexEntry:
+    def create_index_entry_from_file(self, file_path: str, merge_stage: int = 0, relative_path: str = None) -> IndexEntry:
         """
-        Create index entry from an existing file
+        Create index entry from an existing file.
+
+        `file_path` is the path actually used to read/stat the file from
+        disk (may be absolute). `relative_path` is what gets recorded as the
+        entry's path and used to compute flags - it must stay relative to
+        self.path regardless of where file_path points, since the index
+        format (and every reader of it) expects entry.path to be relative to
+        the repo root, not to the caller's cwd. Defaults to file_path so
+        call sites that already pass a self.path-relative path (assuming
+        cwd == self.path) keep working unchanged.
         """
-        
+
+        relative_path = relative_path if relative_path is not None else file_path
+
         # check if file exists
         if not os.path.exists(file_path):
             display_error_message(f"File {file_path} does not exist")
@@ -397,11 +414,11 @@ class Repository:
         content = bytes()
         with open(file_path, "rb") as f:
             content = f.read()
-        
+
         # store file content as blob object
         object = self.hash_object(content, ObjectType.blob, True)
         sha1 = object.oid(hexdigest=False).digest()
-        display_success_message(f"Added/Updated {file_path} file")
+        display_success_message(f"Added/Updated {relative_path} file")
 
         # get file stats
         stat = os.stat(file_path)
@@ -440,20 +457,20 @@ class Repository:
             size = size,
             sha1 = sha1,
             mode = mode,
-            flags = make_flags(file_path, merge_stage),
-            path = file_path
+            flags = make_flags(relative_path, merge_stage),
+            path = relative_path
         )
         return index_entry
 
-    def create_index_entry_from_sha(self, sha: str, file_path: str, merge_stage: int = 0) -> IndexEntry:
+    def create_index_entry_from_sha(self, sha: str, file_path: str, merge_stage: int = 0, mode: int = 0o100644) -> IndexEntry:
         """
         Create index entry from an existing sha blob
         """
-        
+
         # check if sha exists
         if not self._is_valid_hash(sha):
             display_error_message(f"Object {sha} does not exist")
-            exit(0)
+            raise ValueError(f"Object {sha} does not exist")
 
         # get blob object
         blob_object = self.read_object(sha, display_info=False)
@@ -469,7 +486,7 @@ class Repository:
             uid = 0,
             gid = 0,
             size = len(blob_object.data),
-            mode = 0o120000,
+            mode = mode,
             sha1 = bytes.fromhex(sha),
             flags = make_flags(file_path, merge_stage),
             path = file_path
@@ -487,10 +504,20 @@ class Repository:
 
         stat = os.stat(file_path)
 
+        # fast path: size or (second-granularity) mtime differing is a
+        # definite modification, no need to read/hash the file
         if stat.st_size != entry.size or int(stat.st_mtime) != entry.mtime_s:
             return True
 
-        return False
+        # size/mtime alone can't distinguish a same-size edit made within the
+        # same wall-clock second as the last staged mtime - confirm by
+        # hashing actual content against the staged sha1 before declaring
+        # the file unmodified
+        with open(file_path, "rb") as file:
+            content = file.read()
+        current_sha1 = blob.FlowGitBlobObject(content).oid(hexdigest=False).digest()
+
+        return current_sha1 != entry.sha1
 
     def update_index(self, add: list[str], remove: list[str], info: bool, list: bool):
         """
@@ -521,7 +548,7 @@ class Repository:
                     file in path_entry_mapping and 
                     self._is_file_modified(path_entry_mapping[file], file_full_path)
                 ):
-                    index_entry = self.create_index_entry_from_file(file)
+                    index_entry = self.create_index_entry_from_file(file_full_path, relative_path=file)
                     path_entry_mapping[file] = index_entry
                     added_files += 1
 
@@ -877,7 +904,7 @@ class Repository:
         # read all files in refs/heads
         refs_heads_folder_path = os.path.join(self.flowgit_directory, "refs", "heads")
         if not os.path.exists(refs_heads_folder_path):
-            raise ValidationError(f"No valid '.flowgit/refs/heads' found")
+            raise FileNotFoundError(f"No valid '.flowgit/refs/heads' found")
 
         # return list of all files
         return os.listdir(refs_heads_folder_path)
@@ -1124,34 +1151,43 @@ class Repository:
         # get current commit sha
         current_commit_sha = self._resolve_head()
 
-        parent = current_commit_sha
-        while parent:
+        # walk the full commit graph reachable from HEAD, not just the
+        # first-parent chain - a merge commit's second (and later) parents
+        # need to be followed too, or commits unique to a merged-in branch
+        # are never reached. `visited` guards against re-visiting a commit
+        # both chains converge on, and against infinite loops.
+        visited = set()
+        stack = [current_commit_sha] if current_commit_sha else []
+        commits = []
 
-            # read commit
-            commit_object = self.read_object(parent, display_info=False)
+        while stack:
+            sha = stack.pop()
+            if not sha or sha in visited:
+                continue
+            visited.add(sha)
 
-            # read parent
-            parent_list = commit_object.parent
-            if len(parent_list) == 0:
-                old_parent = parent
-                parent = None
-            elif len(parent_list) >= 1:
-                old_parent = parent
-                parent = parent_list[0]
-            elif len(parent_list) == 2:
-                display_information_message("[MERGE_COMMIT]")
+            commit_object = self.read_object(sha, display_info=False)
+            commits.append((sha, commit_object))
+
+            for parent_sha in commit_object.parent:
+                if parent_sha not in visited:
+                    stack.append(parent_sha)
+
+        # newest first, same as before for a linear history
+        commits.sort(key=lambda entry: float(entry[1].author_timestamp), reverse=True)
+
+        for sha, commit_object in commits:
 
             # display commit info
-            display_information_message(f"commit {old_parent}")
+            if len(commit_object.parent) >= 2:
+                display_information_message("[MERGE_COMMIT]")
+            display_information_message(f"commit {sha}")
             display_information_message(f"Author: {commit_object.author} <{commit_object.author_email}>")
-            display_information_message(f"Date: {int(commit_object.author_timestamp)}")
+            display_information_message(f"Date: {int(float(commit_object.author_timestamp))}")
             print()
             if commit_object.message:
                 display_information_message(f"\t{commit_object.message}")
             print("\n")
-
-            if len(parent_list) == 0:
-                break
 
     def _get_staged_changes_status(self) -> tuple[list[str], list[str], list[str]]:
         """
@@ -1235,7 +1271,7 @@ class Repository:
 
         for entry in index_entries:
             full_file_path = os.path.join(self.path, entry.path)
-            if not os.path.exists(entry.path):
+            if not os.path.exists(full_file_path):
                 deleted_files.append(entry.path)
             elif entry.path in file_list and self._is_file_modified(entry, full_file_path):
                 modified_files.append(entry.path)
@@ -1342,6 +1378,9 @@ class Repository:
 
             # get last commit tree sha
             commit_sha = self._resolve_head()
+            if not commit_sha:
+                display_error_message(f"No commits yet, nothing to restore from")
+                return
             commit_object = self.read_object(commit_sha, display_info = False)
             tree_sha = commit_object.tree
 
@@ -1433,6 +1472,9 @@ class Repository:
 
             # read commit tree entries
             commit_sha = self._resolve_head()
+            if not commit_sha:
+                display_error_message(f"No commits yet, nothing to diff against")
+                return
             commit_object = self.read_object(commit_sha, display_info=False)
             tree_entries = self.read_tree_index_entry_recursive(commit_object.tree)
 
@@ -1715,10 +1757,12 @@ class Repository:
         current_entries = self.read_tree_index_entry_recursive(current_commit.tree)
         merge_entries = self.read_tree_index_entry_recursive(merge_commit.tree)
 
-        # generate path -> sha dicts for lookup
-        ancestor = {e.path: e.sha1.hex() for e in ancestor_entries}
-        current = {e.path: e.sha1.hex() for e in current_entries}
-        merge = {e.path: e.sha1.hex() for e in merge_entries}
+        # generate path -> IndexEntry dicts for lookup - keeping the whole
+        # entry (not just the blob sha) so the real file mode carries
+        # through to the conflict-stage entries below
+        ancestor = {e.path: e for e in ancestor_entries}
+        current = {e.path: e for e in current_entries}
+        merge = {e.path: e for e in merge_entries}
 
         index_entries: List[IndexEntry] = []
 
@@ -1727,13 +1771,16 @@ class Repository:
 
             # create index entries
             if path in ancestor:
-                ancestor_entry = self.create_index_entry_from_sha(ancestor[path], path, 1)
+                entry = ancestor[path]
+                ancestor_entry = self.create_index_entry_from_sha(entry.sha1.hex(), path, 1, mode=entry.mode)
                 index_entries.append(ancestor_entry)
             if path in current:
-                current_entry = self.create_index_entry_from_sha(current[path], path, 2)
+                entry = current[path]
+                current_entry = self.create_index_entry_from_sha(entry.sha1.hex(), path, 2, mode=entry.mode)
                 index_entries.append(current_entry)
             if path in merge:
-                merge_entry = self.create_index_entry_from_sha(merge[path], path, 3)
+                entry = merge[path]
+                merge_entry = self.create_index_entry_from_sha(entry.sha1.hex(), path, 3, mode=entry.mode)
                 index_entries.append(merge_entry)
 
         index_file_path = os.path.join(self.flowgit_directory, "index")
@@ -1807,6 +1854,15 @@ class Repository:
         self._create_merge_start_files(current_branch, merge_branch, merge_branch_commit_sha)
         updated_paths, removed_paths, conflicting_paths = self._handle_true_merge(common_ancestor_sha, current_commit_sha, merge_branch_commit_sha)
 
+        # path -> IndexEntry lookups from both tips being merged, so a path
+        # that's genuinely new to the current branch's index can still get
+        # a correct mode without needing to read a working-tree file that
+        # was never checked out here (see BUG-19)
+        current_commit_obj = self.read_object(current_commit_sha, display_info=False)
+        merge_commit_obj = self.read_object(merge_branch_commit_sha, display_info=False)
+        current_tree_entries = {e.path: e for e in self.read_tree_index_entry_recursive(current_commit_obj.tree)}
+        merge_tree_entries = {e.path: e for e in self.read_tree_index_entry_recursive(merge_commit_obj.tree)}
+
         # read current index
         index_path = os.path.join(self.flowgit_directory, "index")
         index_entries: List[IndexEntry] = read_index(index_path)
@@ -1828,23 +1884,55 @@ class Repository:
                     index_entry.sha1 = bytes.fromhex(sha)
                     updated_index_entries_map[path] = index_entry
 
-                # if path doesnt exist, add a new entry for it
+                # if path doesnt exist, add a new entry for it - build it
+                # directly from the blob sha (object store) rather than
+                # reading a working-tree file that may not exist yet: this
+                # path may have been introduced solely by the branch being
+                # merged in and never checked out on the current branch
                 else:
-                    index_entry = self.create_index_entry_from_file(path)
+                    source_entry = current_tree_entries.get(path) or merge_tree_entries.get(path)
+                    mode = source_entry.mode if source_entry else 0o100644
+                    index_entry = self.create_index_entry_from_sha(sha, path, mode=mode)
                     updated_index_entries_map[path] = index_entry
 
-        # update index_path_entry_mapping with updated and removed files
-        for path in index_path_entry_mapping:
-            if path in removed_paths:
+        # update index_path_entry_mapping with updated and removed files.
+        # done as two separate passes rather than mutating
+        # index_path_entry_mapping while iterating over it (which raises
+        # RuntimeError: dictionary changed size during iteration whenever
+        # removed_paths is non-empty), and applying updated_index_entries_map
+        # as a proper union rather than only updating pre-existing keys
+        # (which silently dropped genuinely new paths from the final index)
+        for path in removed_paths:
+            if path in index_path_entry_mapping:
                 del index_path_entry_mapping[path]
-            elif path in updated_index_entries_map:
-                index_path_entry_mapping[path] = updated_index_entries_map[path]
+
+        for path, entry in updated_index_entries_map.items():
+            index_path_entry_mapping[path] = entry
 
         # convert into list of index entries
         final_index_entries = list([index_path_entry_mapping[path] for path in index_path_entry_mapping])
 
         # write changes to index
         write_index(index_path, final_index_entries)
+
+        # delete working-tree files for paths the 3-way merge removed -
+        # checkout_index() only ever writes/updates files that are still in
+        # the index, it has no delete capability, so paths safely removed by
+        # the merge would otherwise vanish from the index but linger on disk
+        for path in removed_paths:
+            file_path = os.path.join(self.path, path)
+            if os.path.exists(file_path):
+                os.remove(file_path)
+
+            # also remove now-empty parent folders
+            parent = os.path.dirname(file_path)
+            while (
+                os.path.isdir(parent)
+                and not os.listdir(parent)
+                and os.path.abspath(parent) != os.path.abspath(self.path)
+            ):
+                os.rmdir(parent)
+                parent = os.path.dirname(parent)
 
         # update files from index
         self.checkout_index([], True, True)

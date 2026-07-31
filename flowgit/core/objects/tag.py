@@ -3,7 +3,7 @@ from typing import Optional
 from flowgit.core.objects import FlowGitObject, ObjectType, Tagger
 
 
-class TagObject(FlowGitObject):
+class FlowGitTagObject(FlowGitObject):
     type = ObjectType.tag
 
     def __init__(
@@ -11,8 +11,8 @@ class TagObject(FlowGitObject):
         sha: str,
         type: ObjectType,
         name: str,
-        tagger: Optional[Tagger],
-        message: str
+        message: str,
+        tagger: Optional[Tagger]
     ):
 
         self.tag_sha = sha
@@ -34,8 +34,8 @@ class TagObject(FlowGitObject):
 
     @classmethod
     def deserialize(cls, data: bytes):
-        lines = data.split("\n")
-        data = {
+        lines = data.decode().split("\n")
+        output = {
             "object": "",
             "type": "",
             "tag": "",
@@ -44,14 +44,37 @@ class TagObject(FlowGitObject):
         }
 
         # read lines
+        is_message = False
         for line in lines:
-            key, value = line.split(" ")
-            if key in data:
-                data[key] = value
+            if is_message:
+                output['message'] += line + "\n"
+                continue
+            if line.strip() == "":
+                is_message = True
+                continue
 
-        if data['tagger']:
-            name, email, timestamp = data['tagger'].split(" ")
-            email = email.replace("<", "").replace(">", "")
-            data['tagger'] = Tagger(name, email, timestamp, "")
+            key, value = line.split(" ", 1)
+            if key == 'object':
+                output['object'] = value
+            elif key == 'type':
+                output['type'] = value
+            elif key == 'tag':
+                output['tag'] = value
+            elif key == 'tagger':
+                output['tagger'] = value
 
-        
+        if output['tagger']:
+            splits = output['tagger'].split(" ")
+            if len(splits) == 3:
+                name, email, timestamp = output['tagger'].split(" ", 3)
+                email = email.replace("<", "").replace(">", "")
+                output['tagger'] = Tagger(name, email, timestamp, "")
+            elif len(splits) == 4:
+                name = splits[0] + ' ' + splits[1]
+                email = splits[2]
+                timestamp = splits[3]
+                email = email.replace("<", "").replace(">", "")
+                output['tagger'] = Tagger(name, email, timestamp, "")
+
+        output['message'] = output['message'].strip()
+        return output

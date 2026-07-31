@@ -42,8 +42,15 @@ class FlowGitCommitObject(FlowGitObject):
             self.committer_email = "unknown@unknown.com"
         
 
-        self.author_timestamp = _get_current_timestamp()
-        self.commiter_timestamp = _get_current_timestamp()
+        if author_tagger and author_tagger.timestamp:
+            self.author_timestamp = author_tagger.timestamp
+        else:
+            self.author_timestamp = _get_current_timestamp()
+
+        if committer_tagger and committer_tagger.timestamp:
+            self.commiter_timestamp = committer_tagger.timestamp
+        else:
+            self.commiter_timestamp = _get_current_timestamp()
 
         self.message = message
 
@@ -94,15 +101,18 @@ class FlowGitCommitObject(FlowGitObject):
             if line.startswith(b"parent"):
                 content = line.split(b" ", 2)[1]
                 output['parent'].append(content)
-            if line.startswith(b"commit"):
-                content = line.split(b" ", 2)[1]
-                output['commit'] = content
             if line.startswith(b"author"):
                 words = line.split(b" ")
-                output['author'] = words[1]
-                output['author_email'] = words[2]
-                output['author_timestamp'] = words[3]
-                output['author_timezone'] = words[4]
+                if len(words) == 5:
+                    output['author'] = words[1]
+                    output['author_email'] = words[2]
+                    output['author_timestamp'] = words[3]
+                    output['author_timezone'] = words[4]
+                else:
+                    output['author'] = words[1] + b' ' + words[2]
+                    output['author_email'] = words[3]
+                    output['author_timestamp'] = words[4]
+                    output['author_timezone'] = words[5]
             if line.startswith(b"committer"):
                 words = line.split(b" ")
                 output['committer'] = words[1]
