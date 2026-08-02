@@ -35,7 +35,7 @@ class Repository:
         self.flowgit_directory = os.path.join(self.path, ".flowgit")
         self.config = FlowGitConfigManager(self.flowgit_directory)
 
-    def _load_flowgit_ignore(self, file_path = ".flowgitignore"):
+    def _load_flowgit_ignore(self, file_path = ".gitignore"):
 
         file_path = os.path.join(self.path, file_path)
         if not os.path.exists(file_path):
@@ -55,7 +55,7 @@ class Repository:
                 file_path = file_path.replace(self.path + "/", "")
                 file_list.add(file_path)
         
-        ignored_file_paths = ['.flowgit', '.flowgitignore']
+        ignored_file_paths = ['.flowgit']
         for file in file_list:
             if specs.match_file(file):
                 ignored_file_paths.append(file)

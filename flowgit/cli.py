@@ -80,7 +80,7 @@ def cat_file(
 @app.command()
 def ignored():
     """
-    Return list of ignored files as per .flowgitignore
+    Return list of ignored files as per .gitignore
     """
     display_command_header()
     repository.ignored()
