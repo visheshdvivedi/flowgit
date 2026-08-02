@@ -1032,6 +1032,7 @@ class Repository:
             # list all branches
             if detached:
                 display_information_message(f"* (HEAD detached at {curr_branch})")
+                return
             
             for branch_name in branches:
                 if branch_name == curr_branch:
@@ -2181,7 +2182,7 @@ class Repository:
         if not remote_fetch:
 
             # get remote's default branch
-            remote_default_branch_name = remote_repository._resolve_head_branch()
+            remote_default_branch_name, _ = remote_repository._resolve_head_branch()
             self.switch(remote_default_branch_name)
 
     def clone(self, url: str):
@@ -2189,8 +2190,12 @@ class Repository:
         Clones a repository from a filesystem or https url to the current folder
         """
 
-        if any(Path.cwd().iterdir()):
+        if any(Path(self.path).iterdir()):
             display_error_message("Current folder is non-empty. Please empty it before cloning a repository.")
+            return
+
+        if not "http" in url and not any(Path(url).iterdir()):
+            display_success_message("Remote folder is empty, unable to clone empty folder.")
             return
 
         if "http" in url:
@@ -2245,6 +2250,9 @@ class Repository:
 
         # get current and remote ref commits
         current_branch_name, detached = self._resolve_head_branch()
+        if detached:
+            display_error_message("Cannot pull while in a detached HEAD state. Switch to a branch first.")
+            return
         current_commit_sha = self._resolve_head()
 
         self.fetch_remote(remote)
@@ -2274,11 +2282,13 @@ class Repository:
             display_warning_message(f"No url found for remote '{remote}', set it using:\n\n\tflowgit remote add origin <url>\n")
             return
 
+        # create remote repository
+        remote_repository = Repository(url)
+
         # get remote commit
         remote_commit_ref = os.path.join(url, ".flowgit", "refs", "heads", branch)
         if not os.path.exists(remote_commit_ref):
-            display_error_message(f"Branch '{branch}' does not exist on remote")
-            return
+            remote_repository.branch(branch, "")
         remote_commit_sha = ""
         with open(remote_commit_ref, "r") as file:
             remote_commit_sha = file.read().strip()
@@ -2286,19 +2296,21 @@ class Repository:
         # compare with local remote ref
         local_remote_ref = os.path.join(self.flowgit_directory, "refs", "remotes", remote, branch)
         if not os.path.exists(local_remote_ref):
-            display_error_message(f"Local remote '{remote}' not found, please fetch and pull before push.")
-            return
-        local_remote_sha = ""
-        with open(local_remote_ref, "r") as file:
-            local_remote_sha = file.read().strip()
 
-        # if local remote and remote sha doesnt match, no fetch was done
-        if local_remote_sha != remote_commit_sha:
-            display_error_message(f"Please run 'flowgit fetch origin' before running push")
-            return
+            # new branch being pushed to remote, allow it
+            pass
 
-        # create remote repository
-        remote_repository = Repository(url)
+        else:
+            local_remote_sha = ""
+            with open(local_remote_ref, "r") as file:
+                local_remote_sha = file.read().strip()
+
+            # if local remote and remote sha doesnt match, no fetch was done
+            if local_remote_sha != remote_commit_sha:
+                display_error_message(f"Please run 'flowgit fetch origin' before running push")
+                return
+
+        # perform remote repository operations
         remote_repository._clone_branch_from_remote_filesystem(self.path, branch)
         remote_repository.update_ref(f"refs/heads/{branch}", current_commit_sha)
         remote_repository.switch(branch)
