@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from flowgit.core.objects.object import FlowGitObject, ObjectType, Tagger
 
 def _get_current_timestamp():
-    return datetime.now(timezone.utc).timestamp()
+    return int(datetime.now(timezone.utc).timestamp())
 
 def _get_timezone_difference():
     local_offset = datetime.now().astimezone().utcoffset()
@@ -12,7 +12,7 @@ def _get_timezone_difference():
     sign = "+" if total_minutes >= 0 else "-"
     total_minutes = abs(total_minutes)
     hours, minutes = divmod(total_minutes, 60)
-    return f"{sign}{hours:02d}:{minutes:02d}"
+    return f"{sign}{hours:02d}{minutes:02d}"
 
 class FlowGitCommitObject(FlowGitObject):
     type = ObjectType.commit
@@ -40,7 +40,6 @@ class FlowGitCommitObject(FlowGitObject):
         else:
             self.committer = "Unknown"
             self.committer_email = "unknown@unknown.com"
-        
 
         if author_tagger and author_tagger.timestamp:
             self.author_timestamp = author_tagger.timestamp
@@ -51,6 +50,16 @@ class FlowGitCommitObject(FlowGitObject):
             self.commiter_timestamp = committer_tagger.timestamp
         else:
             self.commiter_timestamp = _get_current_timestamp()
+
+        if author_tagger and author_tagger.timezone:
+            self.author_timezone = author_tagger.timezone
+        else:
+            self.author_timezone = _get_timezone_difference()
+
+        if committer_tagger and committer_tagger.timezone:
+            self.commiter_timezone = committer_tagger.timezone
+        else:
+            self.commiter_timezone = _get_timezone_difference()
 
         self.message = message
 
@@ -63,8 +72,8 @@ class FlowGitCommitObject(FlowGitObject):
                 lines.append(f"parent {parent}")
 
         lines.extend([
-            f"author {self.author} <{self.author_email}> {self.author_timestamp} {_get_timezone_difference()}",
-            f"committer {self.committer} <{self.committer_email}> {self.commiter_timestamp} {_get_timezone_difference()}",
+            f"author {self.author} <{self.author_email}> {self.author_timestamp} {self.author_timezone}",
+            f"committer {self.committer} <{self.committer_email}> {self.commiter_timestamp} {self.commiter_timezone}",
             "",
             self.message
         ])
@@ -88,9 +97,10 @@ class FlowGitCommitObject(FlowGitObject):
             "message": ""
         }
         is_message = False
+        message_lines = []
         for line in lines:
             if is_message:
-                output["message"] += line.decode() + "\n"
+                message_lines.append(line.decode())
                 continue
             if line == b"":
                 is_message = True
@@ -120,4 +130,5 @@ class FlowGitCommitObject(FlowGitObject):
                 output['committer_timestamp'] = words[3]
                 output['committer_timezone'] = words[4]
 
+        output['message'] = "\n".join(message_lines)
         return output

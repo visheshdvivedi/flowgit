@@ -5,11 +5,13 @@ import zlib
 import shutil
 import difflib
 import pathspec
-from typing import List, Tuple, Dict, Union
+import subprocess
+from typing import List, Tuple, Dict, Union, Literal
 from hashlib import sha1
 from pathlib import Path
 
 from flowgit.core.objects import *
+from flowgit.core.objects.commit import _get_current_timestamp, _get_timezone_difference
 from flowgit.services.config import FlowGitConfigManager
 from flowgit.services.index_flag import get_stage_from_index_entry, make_flags
 from flowgit.services.algorithm import get_content_difference_difflib
@@ -75,15 +77,8 @@ class Repository:
         folder_name = hash[:2]
         file_name = hash[2:]
 
-        folder_path = os.path.join(self.flowgit_directory, "objects", folder_name)
-        if not os.path.exists(folder_path):
-            return False
-    
-        for file in os.listdir(folder_path):
-            if file.startswith(file_name):
-                return True
-            
-        return False
+        full_path = os.path.join(self.flowgit_directory, "objects", folder_name, file_name)
+        return os.path.exists(full_path)
 
     def _get_umerged_index_entries(self) -> List[IndexEntry]:
         """
@@ -281,6 +276,17 @@ class Repository:
             )
             content = object.serialize().decode()
 
+        elif type == ObjectType.tag.value:
+            tag_info = FlowGitTagObject.deserialize(decompressed_bytes[null_idx+1:])
+            object = FlowGitTagObject(
+                sha = tag_info['object'],
+                type = tag_info['type'],
+                name = tag_info['tag'],
+                message = tag_info['message'],
+                tagger = tag_info['tagger']
+            )
+            content = object.serialize().decode()
+
         # display information
         if display_info: 
             display_information_message(f"Type: {type}")
@@ -382,8 +388,8 @@ class Repository:
         tagger = Tagger(
             name = config['user']['name'],
             email = config['user']['email'],
-            timestamp="",
-            timezone=""
+            timestamp=str(_get_current_timestamp()),
+            timezone=_get_timezone_difference()
         )
         tag_object = FlowGitTagObject(
             sha=object, type=type, name=name, message=message, tagger=tagger
@@ -1798,38 +1804,11 @@ class Repository:
                 filtered_entries.append(entry)
 
         write_index(index_file_path, filtered_entries)
-            
-    def merge(self, merge_branch: str) -> None:
+
+    def _merge_commits(self, current_commit_sha: str, current_branch_name: str, merge_branch_commit_sha: str, merge_branch_name: str):
         """
-        Merge two branches
+        Finds common ancestor -> Performs fast-forward check -> Performs three way merge -> Perforna conflict handling
         """
-
-        # check if merging
-        if self._check_merging():
-            display_error_message("You have not concluded your merge.")
-            return
-
-        # get current branch
-        current_branch, detached = self._resolve_head_branch()
-        if current_branch == merge_branch:
-            display_error_message(f"Already on '{current_branch}', cannot merge it to itself")
-            return
-
-        # check if merge_branch exists or not
-        branches = self._list_all_branches()
-        if merge_branch not in branches:
-            display_error_message(f"Branch '{merge_branch}' does not exist")
-            return
-
-        # get current branch and merge branch latest commit
-        current_commit_sha = self._resolve_head()
-        merge_branch_path = os.path.join(self.flowgit_directory, "refs", "heads", merge_branch)
-        merge_branch_commit_sha = open(merge_branch_path).read().strip()
-
-        # both have same commit, nothing to do
-        if current_commit_sha == merge_branch_commit_sha:
-            display_success_message("Already up to date.")
-            return
 
         # to check for fast-forward or true merge, find common ancestor
         common_ancestor_sha = self._find_common_ancestors(current_commit_sha, merge_branch_commit_sha)
@@ -1837,9 +1816,9 @@ class Repository:
         # if common ancestor sha matches current branch latest commit
         # means its a fast forward situation
         if common_ancestor_sha == current_commit_sha:
-            self.update_ref(f"refs/heads/{current_branch}", merge_branch_commit_sha)
-            self.switch(merge_branch, switch_to_new_branch=False)
-            display_success_message(f"'{current_branch}' fast forwarded to '{merge_branch}'")
+            self.update_ref(f"refs/heads/{current_branch_name}", merge_branch_commit_sha)
+            self._switch_to_commit(current_commit_sha, merge_branch_commit_sha)
+            display_success_message(f"'{current_branch_name}' fast forwarded to '{merge_branch_name}'")
             return
 
         # in case of true merge, find common ancestor
@@ -1851,13 +1830,9 @@ class Repository:
             return
 
         # get file updates based on true merge
-        self._create_merge_start_files(current_branch, merge_branch, merge_branch_commit_sha)
+        self._create_merge_start_files(current_branch_name, merge_branch_name, merge_branch_commit_sha)
         updated_paths, removed_paths, conflicting_paths = self._handle_true_merge(common_ancestor_sha, current_commit_sha, merge_branch_commit_sha)
 
-        # path -> IndexEntry lookups from both tips being merged, so a path
-        # that's genuinely new to the current branch's index can still get
-        # a correct mode without needing to read a working-tree file that
-        # was never checked out here (see BUG-19)
         current_commit_obj = self.read_object(current_commit_sha, display_info=False)
         merge_commit_obj = self.read_object(merge_branch_commit_sha, display_info=False)
         current_tree_entries = {e.path: e for e in self.read_tree_index_entry_recursive(current_commit_obj.tree)}
@@ -1884,24 +1859,13 @@ class Repository:
                     index_entry.sha1 = bytes.fromhex(sha)
                     updated_index_entries_map[path] = index_entry
 
-                # if path doesnt exist, add a new entry for it - build it
-                # directly from the blob sha (object store) rather than
-                # reading a working-tree file that may not exist yet: this
-                # path may have been introduced solely by the branch being
-                # merged in and never checked out on the current branch
+                # if path doesnt exist, add a new entry for it
                 else:
                     source_entry = current_tree_entries.get(path) or merge_tree_entries.get(path)
                     mode = source_entry.mode if source_entry else 0o100644
                     index_entry = self.create_index_entry_from_sha(sha, path, mode=mode)
                     updated_index_entries_map[path] = index_entry
 
-        # update index_path_entry_mapping with updated and removed files.
-        # done as two separate passes rather than mutating
-        # index_path_entry_mapping while iterating over it (which raises
-        # RuntimeError: dictionary changed size during iteration whenever
-        # removed_paths is non-empty), and applying updated_index_entries_map
-        # as a proper union rather than only updating pre-existing keys
-        # (which silently dropped genuinely new paths from the final index)
         for path in removed_paths:
             if path in index_path_entry_mapping:
                 del index_path_entry_mapping[path]
@@ -1915,10 +1879,6 @@ class Repository:
         # write changes to index
         write_index(index_path, final_index_entries)
 
-        # delete working-tree files for paths the 3-way merge removed -
-        # checkout_index() only ever writes/updates files that are still in
-        # the index, it has no delete capability, so paths safely removed by
-        # the merge would otherwise vanish from the index but linger on disk
         for path in removed_paths:
             file_path = os.path.join(self.path, path)
             if os.path.exists(file_path):
@@ -1958,10 +1918,388 @@ class Repository:
             tree_sha = self.write_tree()
 
             # create commit object from it
-            merge_commit_object = self.commit_tree(tree_sha, [current_commit_sha, merge_branch_commit_sha], f"Merge branch '{merge_branch}' into '{current_branch}'")
+            merge_commit_object = self.commit_tree(tree_sha, [current_commit_sha, merge_branch_commit_sha], f"Merge branch '{merge_branch_name}' into '{current_branch_name}'")
 
             # update HEAD pointer
-            self.update_ref(f"refs/heads/{current_branch}", merge_commit_object.oid())
+            self.update_ref(f"refs/heads/{current_branch_name}", merge_commit_object.oid())
 
             # remove MERGE_HEAD and MERGE_MSG files as the merge was successful
             self._delete_merge_files()
+
+            
+    def merge(self, merge_branch: str) -> None:
+        """
+        Merge two branches
+        """
+
+        # check if merging
+        if self._check_merging():
+            display_error_message("You have not concluded your merge.")
+            return
+
+        # get current branch
+        current_branch, detached = self._resolve_head_branch()
+        if current_branch == merge_branch:
+            display_error_message(f"Already on '{current_branch}', cannot merge it to itself")
+            return
+
+        # check if merge_branch exists or not
+        branches = self._list_all_branches()
+        if merge_branch not in branches:
+            display_error_message(f"Branch '{merge_branch}' does not exist")
+            return
+
+        # get current branch and merge branch latest commit
+        current_commit_sha = self._resolve_head()
+        merge_branch_path = os.path.join(self.flowgit_directory, "refs", "heads", merge_branch)
+        merge_branch_commit_sha = open(merge_branch_path).read().strip()
+
+        # both have same commit, nothing to do
+        if current_commit_sha == merge_branch_commit_sha:
+            display_success_message("Already up to date.")
+            return
+
+        self._merge_commits(current_commit_sha, current_branch, merge_branch_commit_sha, merge_branch)
+
+    def _get_remote_type(self, remote: str) -> Union[str, Literal['filesystem', 'https', '']]:
+
+        # get remote url value from config
+        remote_url = self.config.get_value(f"remote \"{remote}\"", "url")
+        if not remote_url:
+            return "", ""
+
+        # if https in remote url, then remote type is https:
+        if "http" in remote_url:
+            return remote_url, "https"
+        else:
+            return remote_url, "filesystem"
+
+    def _fetch_from_filesystem(self, remote: str, url: str, branch: str):
+        """
+        Fetches from filesystem type url (code on separate folder)
+        """
+
+        # check and read refs/heads/<branch>
+        ref_path = os.path.join(url, "refs", "heads", branch)
+        if not os.path.exists(ref_path):
+            pass
+    
+
+    def fetch(self, remote: str) -> bool:
+        """
+        Fetch refs and objects from a remote via the real git binary,
+        without touching the working tree or moving any local branch
+        """
+
+        # branch name: get current branch
+        current_branch_name = self._resolve_head_branch()
+
+        # add refs/remotes/<remote-name>/<branch>
+        ref_path = os.path.join(self.flowgit_directory, "refs", "remotes", remote, "main")
+        if not os.path.exists(ref_path):
+            self.update_ref(f"refs/remotes/{remote}/main", "")
+
+        # check if to pass filesystem fetch or https fetch
+        remote_url, remote_type = self._get_remote_type(remote)
+        if remote_type == 'filesystem':
+            self._fetch_from_filesystem(remote, remote_url, current_branch_name)
+        elif remote_type == 'https':
+            self._fetch_from_https(remote, remote_url)
+        else:
+            display_error_message(f"Invalid remote url for remote '{remote}': '{remote_url}'")
+
+    def remote(self, action: str, name: str = "", url: str = "") -> None:
+        """
+        Manage remotes (add/remove/list), delegated to the real git binary
+        """
+        if action not in ['add', 'remove', 'list', 'get-url', 'set-url']:
+            display_error_message(f"Invalid remote action '{action}'")
+            return
+
+        if action == 'add':
+            section_name = f"remote \"{name}\""
+            if self.config.is_section_exist(section_name):
+                display_error_message(f"Remote '{name}' already set, skipping override ...")
+                return
+            self.config.set_value(section_name, 'url', url)
+
+        elif action == 'remove':
+            section_name = f"remote \"{name}\""
+            if not self.config.is_section_exist(section_name):
+                display_warning_message(f"Remote '{name}' does not exist, skipping removal ...")
+                return
+            self.config.remove_section(section_name)
+
+        elif action == 'list':
+            configurations = self.config.get_config()
+            for key in configurations:
+                if 'remote' in key:
+                    name = key.replace("remote \"", "").replace("\"", "")
+                    print(f"{name} -> {configurations[key]['url']}")
+
+        elif action == 'get-url':
+            section_name = f"remote \"{name}\""
+            value = self.config.get_value(section_name, 'url')
+            if value:
+                display_success_message(value)
+            else:
+                display_error_message(f"No url found for remote '{name}'")
+
+        elif action == 'set-url':
+            section_name = f"remote \"{name}\""
+            self.config.set_value(section_name, 'url', url)
+            display_success_message(f"Remote updated successfullys")
+
+    def _clone_tree_object(self, remote_repo: Repository, tree_sha: str): 
+        """
+        Clone a tree object and call itself recursively
+        """
+
+        # create tree object
+        tree_object: FlowGitTreeObject = remote_repo.read_object(tree_sha, False)
+
+        # iterate through its entries
+        for entry in tree_object.entries:
+
+            # if entry type is blob, copy the entry from remote repo
+            # to the current repo
+            if entry.type == 'blob':
+
+                # if sha exists, skip creation
+                sha = entry.oid
+                if self._is_valid_hash(sha):
+                    continue
+
+                remote_object: FlowGitBlobObject = remote_repo.read_object(sha, False)
+                self._write_object(remote_object)
+
+            # if entry type is tree, then recursively call this method
+            # to iterate through the tree
+            if entry.type == 'tree':
+
+                # iterate through the objects of the tree
+                self._clone_tree_object(remote_repo, entry.oid)
+
+        # clone this tree object also
+        self._write_object(tree_object)
+
+    def _clone_commit_object(self, remote_repo: Repository, commit_sha: str):
+        """
+        Clones a commit object from remote repository to current repository
+        """
+
+        # get current commit object
+        current_commit_object: FlowGitCommitObject = remote_repo.read_object(commit_sha, False)
+
+        # clone tree object
+        self._clone_tree_object(remote_repo, current_commit_object.tree)
+
+        # clone this commit object
+        self._write_object(current_commit_object)
+
+
+    def _clone_branch_from_remote_filesystem(self, url: str, branch: str) -> str:
+        """
+        Clones all the objects from the remote filesystem based repository's branch.
+        Returns the tip commit of the branch
+        """
+
+        # create remote repository object
+        remote_repository = Repository(url)
+
+        # check if .flowgit directory exist or not
+        remote_flowgit_directory = os.path.join(url, ".flowgit")
+        if not os.path.exists(remote_flowgit_directory):
+            display_error_message(f"Folder '{url}' is not a flowgit tracked repository")
+            return
+
+        # display informational message
+        display_information_message(f"Cloning objects for branch '{branch}' from remote repository ...")
+
+        # read refs/heads/<branch> value
+        branch_ref_file = os.path.join(remote_flowgit_directory, "refs", "heads", branch)
+        if not os.path.exists(branch_ref_file):
+            display_error_message(f"Branch '{branch}' does not exist on remote repository")
+            return
+        branch_ref_value = ""
+        with open(branch_ref_file, "r") as file:
+            branch_ref_value = file.read().strip()
+
+        # iterate through the commit graph
+        current_commit_object: FlowGitCommitObject = remote_repository.read_object(branch_ref_value, False)
+        start_commit = current_commit_object
+        parents = current_commit_object.parent
+
+        # clone commit objects
+        self._clone_commit_object(remote_repository, current_commit_object.oid())
+
+        # iterate through its parents
+        while len(parents):
+
+            # clone parents
+            for parent in parents:
+                self._clone_commit_object(remote_repository, parent)
+
+            parent = parents[0]
+            commit_object: FlowGitCommitObject = self.read_object(parent, False)
+            parents = commit_object.parent
+
+        display_success_message(f"Branch '{branch}' cloned from remote repository successfully.")
+
+        return start_commit.oid()
+
+
+    def _clone_filesystem_repository(self, url: str, remote_fetch: bool = False, remote_name: str = 'origin', clone_branches: List[str] = []):
+        """
+        Clones a repository from filesystem onto the current folder
+        """
+
+        # check if .flowgit directory exist or not
+        remote_flowgit_directory = os.path.join(url, ".flowgit")
+        if not os.path.exists(remote_flowgit_directory):
+            display_error_message(f"Folder '{url}' is not a flowgit tracked repository")
+            return
+
+        # initialize remote repository
+        remote_repository = Repository(url)
+        if not remote_fetch:
+            self.initalize_flowgit()
+
+        branches = clone_branches if len(clone_branches) else remote_repository._list_all_branches()
+        for branch in branches:
+
+            # clone remote branch
+            branch_tip_commit = self._clone_branch_from_remote_filesystem(url, branch)
+
+            # update ref
+            if not remote_fetch:
+                self.update_ref(f"refs/heads/{branch}", branch_tip_commit)
+            else:
+                self.update_ref(f"refs/remotes/{remote_name}/{branch}", branch_tip_commit)
+
+        # run switch to populate files on main branch
+        if not remote_fetch:
+
+            # get remote's default branch
+            remote_default_branch_name = remote_repository._resolve_head_branch()
+            self.switch(remote_default_branch_name)
+
+    def clone(self, url: str):
+        """
+        Clones a repository from a filesystem or https url to the current folder
+        """
+
+        if any(Path.cwd().iterdir()):
+            display_error_message("Current folder is non-empty. Please empty it before cloning a repository.")
+            return
+
+        if "http" in url:
+            self._clone_https_repository(url)
+        else:
+            self._clone_filesystem_repository(url)
+
+
+    def fetch_remote(self, remote: str):
+        """
+        Fetches the new changes from remote and update in local refs/remotes/origin/<branch>
+        """
+
+        # get url from config
+        url = self.config.get_value(f"remote \"{remote}\"", 'url')
+        if not url:
+            display_warning_message(f"No url found for remote '{remote}', set it using:\n\n\tflowgit remote add origin <url>\n")
+            return
+
+        # create remote repository object
+        remote_repository = Repository(url)
+
+        changed_branches = set()
+        for branch in remote_repository._list_all_branches():
+
+            # read branch sha
+            remote_ref_path = os.path.join(url, ".flowgit", "refs", "heads", branch)
+            with open(remote_ref_path, "r") as file:
+                remote_sha = file.read().strip()
+
+            # compare with local ref
+            local_ref_path = os.path.join(self.flowgit_directory, "refs", "remotes", remote, branch)
+            if not os.path.exists(local_ref_path):
+                changed_branches.add(branch)
+                continue
+
+            # get local ref commit sha
+            with open(local_ref_path, "r") as file:
+                local_sha = file.read().strip()
+
+            if local_sha != remote_sha:
+                changed_branches.add(branch)
+
+        # for each branch, clone the objects onto remote refs
+        self._clone_filesystem_repository(url, True, remote, list(changed_branches))
+
+
+    def pull_remote(self, remote: str, branch: str):
+        """
+        Apply changes from fetch
+        """
+
+        # get current and remote ref commits
+        current_branch_name, detached = self._resolve_head_branch()
+        current_commit_sha = self._resolve_head()
+
+        self.fetch_remote(remote)
+        remote_commit_ref = os.path.join(self.flowgit_directory, "refs", "remotes", remote, branch)
+        if not os.path.exists(remote_commit_ref):
+            display_error_message(f"Branch '{branch}' does not exist on remote")
+            return
+
+        remote_commit_sha = ""
+        with open(remote_commit_ref, "r") as file:
+            remote_commit_sha = file.read().strip()
+
+        self._merge_commits(current_commit_sha, current_branch_name, remote_commit_sha, f"{remote}/{branch}")
+
+    def push_to_remote(self, remote: str, branch: str):
+        """
+        Push local changes to remote branch
+        """
+
+        # get current branch and sha
+        current_branch_name, detached = self._resolve_head_branch()
+        current_commit_sha = self._resolve_head()
+
+        # get url from config
+        url = self.config.get_value(f"remote \"{remote}\"", 'url')
+        if not url:
+            display_warning_message(f"No url found for remote '{remote}', set it using:\n\n\tflowgit remote add origin <url>\n")
+            return
+
+        # get remote commit
+        remote_commit_ref = os.path.join(url, ".flowgit", "refs", "heads", branch)
+        if not os.path.exists(remote_commit_ref):
+            display_error_message(f"Branch '{branch}' does not exist on remote")
+            return
+        remote_commit_sha = ""
+        with open(remote_commit_ref, "r") as file:
+            remote_commit_sha = file.read().strip()
+
+        # compare with local remote ref
+        local_remote_ref = os.path.join(self.flowgit_directory, "refs", "remotes", remote, branch)
+        if not os.path.exists(local_remote_ref):
+            display_error_message(f"Local remote '{remote}' not found, please fetch and pull before push.")
+            return
+        local_remote_sha = ""
+        with open(local_remote_ref, "r") as file:
+            local_remote_sha = file.read().strip()
+
+        # if local remote and remote sha doesnt match, no fetch was done
+        if local_remote_sha != remote_commit_sha:
+            display_error_message(f"Please run 'flowgit fetch origin' before running push")
+            return
+
+        # create remote repository
+        remote_repository = Repository(url)
+        remote_repository._clone_branch_from_remote_filesystem(self.path, branch)
+        remote_repository.update_ref(f"refs/heads/{branch}", current_commit_sha)
+        remote_repository.switch(branch)
+        self.update_ref(f"refs/remotes/{remote}/{branch}", current_commit_sha)

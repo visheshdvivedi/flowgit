@@ -1,3 +1,5 @@
+import subprocess
+
 import pytest
 
 import flowgit.services.config as config_module
@@ -51,6 +53,20 @@ def make_file(tmp_path):
             full_path.write_text(content)
         return relpath
     return _make_file
+
+
+@pytest.fixture
+def bare_remote(tmp_path):
+    """
+    A local bare git repo usable as a real push/fetch/pull target, without
+    needing network access. push/fetch/pull/remote are implemented by
+    shelling out to the real git binary against .flowgit (now a valid
+    git-dir), so testing them for real - rather than mocking subprocess -
+    is both possible and far higher-signal.
+    """
+    remote_path = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote_path)], check=True, capture_output=True)
+    return str(remote_path)
 
 
 @pytest.fixture

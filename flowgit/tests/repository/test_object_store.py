@@ -1,6 +1,8 @@
+import os
+
 import pytest
 
-from flowgit.core.objects import ObjectType, TreeEntry
+from flowgit.core.objects import ObjectType, TreeEntry, FlowGitTagObject
 
 
 class TestHashObjectCatFile:
@@ -118,3 +120,97 @@ class TestMakeTag:
         commit = repo.commit_tree(tree_sha, [], "message")
 
         repo.make_tag(commit.oid(), "commit", "v1.0", "release message")
+
+    def test_make_tag_populates_real_timestamp_and_timezone(self, repo, make_file):
+        """
+        A tag with a blank tagger timestamp/timezone isn't a valid git tag
+        object - make_tag() used to always pass timestamp="" / timezone="",
+        which would fail integrity checks against a real git binary.
+        """
+        make_file("a.txt", "aaa")
+        repo.add(["a.txt"])
+        tree_sha = repo.write_tree()
+        commit = repo.commit_tree(tree_sha, [], "message")
+
+        repo.make_tag(commit.oid(), "commit", "v1.0", "release message")
+
+        tag_sha = None
+        for folder in os.listdir(os.path.join(repo.flowgit_directory, "objects")):
+            folder_path = os.path.join(repo.flowgit_directory, "objects", folder)
+            for filename in os.listdir(folder_path):
+                candidate = folder + filename
+                obj = repo.read_object(candidate, display_info=False)
+                if isinstance(obj, FlowGitTagObject):
+                    tag_sha = candidate
+                    break
+
+        assert tag_sha is not None
+        tag_obj = repo.read_object(tag_sha, display_info=False)
+        assert tag_obj.tagger.timestamp != ""
+        assert tag_obj.tagger.timezone != ""
+
+
+class TestObjectRoundTripFidelity:
+    """
+    For every object type: create it, note the sha it was stored under, read
+    it back via read_object() (which deserializes and reconstructs a fresh
+    object from the raw bytes), then re-derive that reconstructed object's
+    own oid. If serialize()/deserialize() aren't perfectly symmetric for
+    every field, the recomputed oid silently diverges from the sha the
+    object is actually stored under - exactly the failure mode clone's
+    integrity check runs into, caught here per-object-type in isolation.
+    """
+
+    def test_blob_round_trip_preserves_oid(self, repo):
+        blob = repo.hash_object(b"some file content for round trip testing", ObjectType.blob, True)
+        original_sha = blob.oid()
+
+        read_back = repo.read_object(original_sha, display_info=False)
+        assert read_back.oid() == original_sha
+
+    def test_tree_round_trip_preserves_oid(self, repo, make_file):
+        make_file("a.txt", "aaa")
+        make_file("dir/nested.txt", "nested content")
+        repo.add(["a.txt", "dir/nested.txt"])
+        tree_sha = repo.write_tree()
+
+        # the top-level tree, and the nested subtree it references, both get
+        # deserialized independently - check both, since a bug could affect
+        # one construction path but not the other
+        top_level = repo.read_object(tree_sha, display_info=False)
+        assert top_level.oid() == tree_sha
+
+        dir_entry = next(e for e in top_level.entries if e.name == "dir")
+        sub_tree = repo.read_object(dir_entry.oid, display_info=False)
+        assert sub_tree.oid() == dir_entry.oid
+
+    def test_commit_round_trip_preserves_oid(self, repo, make_file):
+        make_file("a.txt", "aaa")
+        repo.add(["a.txt"])
+        tree_sha = repo.write_tree()
+        commit = repo.commit_tree(tree_sha, [], "a commit message\nwith multiple lines\nfor round trip testing")
+        original_sha = commit.oid()
+
+        read_back = repo.read_object(original_sha, display_info=False)
+        assert read_back.oid() == original_sha
+
+    def test_tag_round_trip_preserves_oid(self, repo, make_file):
+        make_file("a.txt", "aaa")
+        repo.add(["a.txt"])
+        tree_sha = repo.write_tree()
+        commit = repo.commit_tree(tree_sha, [], "message")
+        repo.make_tag(commit.oid(), "commit", "v1.0", "a tag message for round trip testing")
+
+        tag_sha = None
+        for folder in os.listdir(os.path.join(repo.flowgit_directory, "objects")):
+            folder_path = os.path.join(repo.flowgit_directory, "objects", folder)
+            for filename in os.listdir(folder_path):
+                candidate = folder + filename
+                obj = repo.read_object(candidate, display_info=False)
+                if isinstance(obj, FlowGitTagObject):
+                    tag_sha = candidate
+                    break
+
+        assert tag_sha is not None
+        read_back = repo.read_object(tag_sha, display_info=False)
+        assert read_back.oid() == tag_sha

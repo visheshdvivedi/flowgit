@@ -26,8 +26,8 @@ class FlowGitTagObject(FlowGitObject):
         lines.append(f"object {self.tag_sha}")
         lines.append(f"type {self.tag_type}")
         lines.append(f"tag {self.tag_name}")
-        lines.append(f"tagger {self.tagger.name} <{self.tagger.email}> {self.tagger.timestamp}")
-        lines.append(" ")
+        lines.append(f"tagger {self.tagger.name} <{self.tagger.email}> {self.tagger.timestamp} {self.tagger.timezone}")
+        lines.append("")
         lines.append(self.tag_message)
         raw_content = "\n".join(lines)
         return raw_content.encode("utf-8")
@@ -65,16 +65,17 @@ class FlowGitTagObject(FlowGitObject):
 
         if output['tagger']:
             splits = output['tagger'].split(" ")
-            if len(splits) == 3:
-                name, email, timestamp = output['tagger'].split(" ", 3)
+            if len(splits) == 4:
+                name, email, timestamp, timezone = output['tagger'].split(" ", 4)
                 email = email.replace("<", "").replace(">", "")
-                output['tagger'] = Tagger(name, email, timestamp, "")
-            elif len(splits) == 4:
+                output['tagger'] = Tagger(name, email, timestamp, timezone)
+            elif len(splits) == 5:
                 name = splits[0] + ' ' + splits[1]
                 email = splits[2]
                 timestamp = splits[3]
+                timezone = splits[4]
                 email = email.replace("<", "").replace(">", "")
-                output['tagger'] = Tagger(name, email, timestamp, "")
+                output['tagger'] = Tagger(name, email, timestamp, timezone)
 
         output['message'] = output['message'].strip()
         return output

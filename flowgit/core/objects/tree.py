@@ -35,7 +35,7 @@ class FlowGitTreeObject(FlowGitObject):
         result = b""
 
         for entry in self.entries:
-            result += str(oct(entry.mode)[2:]).encode()
+            result += entry.mode.encode() if isinstance(entry.mode, str) else str(oct(entry.mode)[2:]).encode()
             result += b" "
             result += entry.name.encode("utf-8")
             result += b"\x00"

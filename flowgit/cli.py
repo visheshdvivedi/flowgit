@@ -357,3 +357,110 @@ def merge(
     """
     display_command_header()
     repository.merge(branch_name)
+
+
+@app.command()
+def remote(
+    action: Annotated[str, Argument(
+        help = "add | remove | list | get-url | set-url"
+    )] = "list",
+    name: Annotated[str, Argument(
+        help = "Remote name"
+    )] = "",
+    url: Annotated[str, Argument(
+        help = "Remote URL (required for 'add')"
+    )] = "",
+):
+    """
+    Manage remotes: add, remove, or list
+    """
+    display_command_header()
+    repository.remote(action, name, url)
+
+
+@app.command(name="config")
+def config_command(
+    key: str = Argument(
+        help = "Config key in '<section>.<key>' format, e.g. 'user.name'"
+    ),
+    value: Annotated[Optional[str], Argument(
+        help = "Value to set; omit to read the current value"
+    )] = None,
+):
+    """
+    Get or set a flowgit config value (e.g. user.name, user.email)
+    """
+    display_command_header()
+
+    if "." not in key:
+        display_error_message("Config key must be in '<section>.<key>' format, e.g. 'user.name'")
+        return
+
+    section, config_key = key.split(".", 1)
+
+    if value is None:
+        current = repository.config.get_value(section, config_key)
+        if current is None:
+            display_error_message(f"'{key}' is not set")
+        else:
+            print(current)
+    else:
+        repository.config.set_value(section, config_key, value)
+
+
+@app.command(name="clone")
+def clone_repository(
+    url: str = Argument(
+        help = "Filesystem or https url of the repository to clone"
+    ),
+):
+    """
+    Clones a repository from its filesystem path or HTTPs path
+    """
+    display_command_header()
+    repository.clone(url)
+
+
+@app.command(name="fetch")
+def fetch_remote(
+    remote: Annotated[str, Argument(
+        help = "The remote to fetch from"
+    )] = "origin"
+):
+    """
+    Fetches the new changes from remote and update in local refs/remotes/origin/<branch>
+    """
+    display_command_header()
+    repository.fetch_remote(remote)
+
+
+@app.command(name="pull")
+def pull_remote(
+    remote: Annotated[str, Argument(
+        help = "The remote to pull from"
+    )] = "origin",
+    branch: Annotated[str, Argument(
+        help = "The branch to pull"
+    )] = "main"
+):
+    """
+    Apply the changes fetched from fetch locally
+    """
+    display_command_header()
+    repository.pull_remote(remote, branch)
+
+
+@app.command(name="push")
+def push_remote(
+    remote: Annotated[str, Argument(
+        help = "The remote to pull from"
+    )] = "origin",
+    branch: Annotated[str, Argument(
+        help = "The branch to pull"
+    )] = "main"
+):
+    """
+    Push the local commited changes to remote repository
+    """
+    display_command_header()
+    repository.push_to_remote(remote, branch)

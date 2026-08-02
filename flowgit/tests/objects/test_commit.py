@@ -89,7 +89,7 @@ class TestCommitObject:
         commit = FlowGitCommitObject(tree="a" * 40)
         assert commit.author == "Unknown"
         assert commit.author_email == "unknown@unknown.com"
-        assert isinstance(commit.author_timestamp, float)
+        assert isinstance(commit.author_timestamp, int)
 
     def test_constructor_preserves_explicit_tagger_timestamp(self):
         """
@@ -112,8 +112,8 @@ class TestCommitObject:
         """
         tagger = make_tagger(timestamp="")
         commit = FlowGitCommitObject(tree="a" * 40, author_tagger=tagger, committer_tagger=tagger)
-        assert isinstance(commit.author_timestamp, float)
-        assert isinstance(commit.commiter_timestamp, float)
+        assert isinstance(commit.author_timestamp, int)
+        assert isinstance(commit.commiter_timestamp, int)
 
     def test_deserialize_extracts_tree_sha(self):
         tagger = make_tagger()

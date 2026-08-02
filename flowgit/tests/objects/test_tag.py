@@ -14,8 +14,8 @@ test_serialize_output = "\n".join([
     f"object {test_sha}",
     "type blob",
     f"tag {test_file_name}",
-    "tagger testuser <testuser@test.com> 123456789",
-    " ",  # serialize() writes a literal single space here, not a true blank line - see BUG-13
+    "tagger testuser <testuser@test.com> 123456789 ",
+    "",
     "tag message",
 ])
 
@@ -82,13 +82,26 @@ class TestTagObject:
         parsed = FlowGitTagObject.deserialize(tag.serialize())
         assert parsed['tagger'].name == "Test User"
 
+    def test_deserialize_single_word_name_preserves_real_timezone(self):
+        """
+        Regression test: the single-word-tagger-name branch of deserialize()
+        used to parse `timezone` off the wire and then discard it, hardcoding
+        Tagger(..., "") instead of using the parsed value. Not caught before
+        since the only single-word-name fixture in this file used an empty
+        timezone, which happened to match the hardcoded "" either way.
+        """
+        tagger = Tagger(name="testuser", email="testuser@test.com", timestamp="123456789", timezone="+0530")
+        tag = make_tag(tagger=tagger, message="Release version 1.0", name="v1.0")
+        parsed = FlowGitTagObject.deserialize(tag.serialize())
+        assert parsed['tagger'].timezone == "+0530"
+
     def test_deserialize_handles_true_blank_line_separator(self):
         raw = "\n".join([
             f"object {test_sha}",
             "type blob",
             f"tag {test_file_name}",
             "tagger testuser <testuser@test.com> 123456789",
-            "",  # a real blank line, unlike serialize()'s literal " " workaround
+            "",
             "tag message",
         ]).encode()
         data = FlowGitTagObject.deserialize(raw)
